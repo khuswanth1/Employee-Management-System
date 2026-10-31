@@ -1,0 +1,21 @@
+.env
+*.env.local
+__pycache__/
+.venv/
+node_modules/
+dist/
+backend/data/
+.pytest_cache/
+.claude/
+
+# scratch / run output
+backend/auth_activity.log
+backend/*_section.txt
+backend/match_*.txt
+backend/extracted_*.txt
+e2e/*.log
+e2e/.tmp/
+e2e/.verify/
+e2e/.auth/
+e2e/test-results/
+e2e/playwright-report/

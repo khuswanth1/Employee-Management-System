@@ -1,0 +1,160 @@
+import { test, expect } from '@playwright/test'
+import { acct, api, iso, loginAs, nextWeekday, PW, token, watchErrors } from '../helpers'
+
+const localInput = (d: Date, hh: number, mm = 0) => {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(hh)}:${p(mm)}`
+}
+
+test.describe('F29 attendance corrections, shifts and leave engine in the browser', () => {
+  test('F29-H1 employee asks for a correction, the manager approves it, the employee sees Approved', async ({ page, browser }) => {
+    const done = watchErrors(page)
+    const day = new Date(); day.setDate(day.getDate() - 3)
+    // a dedicated employee under the manager: other specs move the seeded people around, and this one must not depend on them
+    const f = await token(acct('founder'))
+    const mgrId = (await api('GET', '/employees/directory', f)).body.items.find((u: any) => u.email === acct('mgr')).id
+    // earlier specs pin this manager to an explicit permission list that predates attendance.approve: back to the defaults
+    expect((await api('PATCH', `/managers/${mgrId}`, f, { permissions: null })).status).toBeLessThan(300)
+    const made = await api('POST', '/employees', f, { email: acct('carla'), full_name: 'Carla Corrections', password: PW, role: 'employee', manager_id: mgrId })
+    expect(made.status).toBe(201)
+    await loginAs(page, acct('carla'))
+    await page.goto('/attendance')
+    await page.getByRole('button', { name: 'Request a correction' }).click()
+    const dlg = page.getByRole('dialog')
+    const send = dlg.getByRole('button', { name: 'Send request' })
+    await expect(send).toBeDisabled()
+    await dlg.getByLabel('Check-in').fill(localInput(day, 9))
+    await dlg.getByLabel('Check-out').fill(localInput(day, 17, 30))
+    await dlg.getByLabel('Reason').fill('Forgot to check out')
+    await send.click()
+    await expect(dlg).toBeHidden()
+    await expect(page.getByRole('table', { name: 'My correction requests' }).getByText('pending')).toBeVisible()
+
+    const m = await (await browser.newContext({ baseURL: 'http://localhost:5273' })).newPage()
+    await loginAs(m, acct('mgr'))
+    await m.goto('/attendance/corrections')
+    await m.getByRole('row', { name: /Carla Corrections/ }).getByRole('button', { name: 'Approve' }).click()
+    await m.getByRole('dialog').getByRole('button', { name: 'Approve' }).click()
+    await expect(m.getByRole('dialog')).toBeHidden()
+    await expect(m.getByText('Nothing to review')).toBeVisible()
+
+    await page.reload()
+    await expect(page.getByRole('table', { name: 'My correction requests' }).getByText('approved')).toBeVisible()
+    await expect(page.getByRole('table', { name: 'Attendance history' }).getByRole('cell', { name: '9:00 AM', exact: false }).first()).toBeVisible()   // shown in the company's zone, not the browser's
+    done()
+  })
+
+  test('F29-H2 HR creates an overnight shift and it shows as ending the next day', async ({ page }) => {
+    const done = watchErrors(page)
+    await loginAs(page, acct('hr'))
+    await page.goto('/attendance/setup')
+    await page.getByRole('button', { name: 'New shift' }).click()
+    const dlg = page.getByRole('dialog')
+    await dlg.getByLabel('Name').fill('E2E night')
+    await dlg.getByLabel('Starts').fill('22:00')
+    await dlg.getByLabel('Ends').fill('06:00')
+    await expect(dlg.getByText('Ends the next day')).toBeVisible()
+    await dlg.getByRole('button', { name: 'Save' }).click()
+    await expect(dlg).toBeHidden()
+    await expect(page.getByRole('row', { name: /E2E night/ })).toContainText('22:00 – 06:00 (+1 day)')
+    done()
+  })
+
+  test('F29-H3 half-day leave is applied, edited to a full day, and counts accordingly', async ({ page }) => {
+    const done = watchErrors(page)
+    const d = iso(nextWeekday(70))
+    await loginAs(page, acct('e1'))
+    await page.goto('/leave')
+    await page.getByRole('button', { name: 'Apply for leave' }).first().click()
+    let dlg = page.getByRole('dialog')
+    await dlg.getByLabel('Leave type').selectOption({ label: 'Casual Leave' })
+    await dlg.getByLabel('From').fill(d)
+    await dlg.getByLabel('Length').selectOption('second')
+    await dlg.getByRole('button', { name: 'Submit request' }).click()
+    await expect(dlg).toBeHidden()
+    const table = page.getByRole('table', { name: 'My leave requests' })
+    const row = table.getByRole('row').filter({ hasText: '0.5 (second half)' })
+    await expect(row).toBeVisible()
+    await row.getByRole('button', { name: 'Edit' }).click()
+    dlg = page.getByRole('dialog')
+    await dlg.getByLabel('Length').selectOption('')
+    await dlg.getByRole('button', { name: 'Save changes' }).click()
+    await expect(dlg).toBeHidden()
+    await expect(table.getByRole('row').filter({ hasText: '0.5 (second half)' })).toHaveCount(0)
+    done()
+  })
+
+  test('F29-H4 approved future leave can be changed through a revision', async ({ page }) => {
+    const done = watchErrors(page)
+    const d = nextWeekday(80)
+    const t = await token(acct('e2'))
+    const types = await api('GET', '/leave/types', t)
+    const casual = types.body.items.find((x: any) => x.name === 'Casual Leave')
+    const made = await api('POST', '/leave/requests', t, { leave_type_id: casual.id, start_date: iso(d), end_date: iso(d), reason: 'e2e revise' })
+    expect(made.status).toBe(201)
+    const m = await token(acct('mgr'))
+    expect((await api('POST', `/leave/requests/${made.body.id}/decision`, m, { approved: true })).status).toBe(200)
+
+    await loginAs(page, acct('e2'))
+    await page.goto('/leave')
+    const table = page.getByRole('table', { name: 'My leave requests' })
+    await table.getByRole('row').filter({ hasText: 'e2e revise' }).or(table.getByRole('row').filter({ hasText: 'approved' })).getByRole('button', { name: 'Change' }).first().click()
+    const dlg = page.getByRole('dialog')
+    await expect(dlg.getByText(/stays in place/)).toBeVisible()
+    const later = iso(nextWeekday(81 + 3))
+    await dlg.getByLabel('From').fill(later)
+    await dlg.getByLabel('To').fill(later)
+    await dlg.getByRole('button', { name: 'Send revision' }).click()
+    await expect(dlg).toBeHidden()
+    await expect(table.getByText('revision')).toBeVisible()
+    done()
+  })
+
+  test('F29-H5 a manager delegates approvals and can end the delegation', async ({ page }) => {
+    const done = watchErrors(page)
+    await loginAs(page, acct('mgr'))
+    await page.goto('/leave/approvals')
+    await page.getByRole('button', { name: 'Delegate my approvals' }).click()
+    const dlg = page.getByRole('dialog')
+    await dlg.getByLabel('Delegate to').selectOption({ label: 'Hannah HR (hr)' })
+    const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1)
+    await dlg.getByLabel('From').fill(iso(yesterday))   // not 'today': the browser's date can be a day ahead of the company timezone for hours each day
+    await dlg.getByLabel('Until').fill(iso(nextWeekday(10)))
+    await dlg.getByRole('button', { name: 'Delegate' }).click()
+    await expect(dlg).toBeHidden()
+    const row = page.getByRole('row', { name: /You → Hannah HR/ })
+    await expect(row).toContainText('active')
+    await row.getByRole('button', { name: 'End' }).click()
+    await expect(page.getByRole('row', { name: /You → Hannah HR/ })).toHaveCount(0)
+    done()
+  })
+
+  test('F29-H6 HR adds a leave type with a carry-forward rule and sees it in the policies table', async ({ page }) => {
+    const done = watchErrors(page)
+    await loginAs(page, acct('hr'))
+    await page.goto('/leave')
+    await page.getByRole('tab', { name: 'Leave policies' }).click()
+    await page.getByRole('button', { name: 'New leave type' }).click()
+    const dlg = page.getByRole('dialog')
+    await dlg.getByLabel('Name').fill('E2E Privilege')
+    await dlg.getByLabel('Days per year').fill('12')
+    await dlg.getByLabel('Carry forward at most (days)').fill('5')
+    await dlg.getByLabel('Carried days lapse after month').fill('3')
+    await dlg.getByRole('button', { name: 'Save' }).click()
+    await expect(dlg).toBeHidden()
+    await expect(page.getByRole('row', { name: /E2E Privilege/ })).toContainText('up to 5, lapses after month 3')
+    done()
+  })
+
+  test('F29-N1 employees cannot reach the approver and setup pages', async ({ page }) => {
+    await loginAs(page, acct('e1'))
+    for (const path of ['/attendance/corrections', '/attendance/setup', '/leave/balances']) {
+      await page.goto(path)
+      await expect(page.getByRole('heading', { name: /attendance corrections|shifts and locations|leave balances/i })).toHaveCount(0)
+    }
+    const t = await token(acct('e1'))
+    expect((await api('GET', '/attendance/corrections', t)).status).toBe(403)
+    expect((await api('POST', '/attendance/shifts', t, { name: 'x1' })).status).toBe(403)
+    expect((await api('GET', '/leave/reports/balances', t)).status).toBe(403)
+  })
+})
