@@ -120,3 +120,4 @@ docker build -t worksphere-frontend:latest .
 # Run containerized on port 80
 docker run -p 80:80 worksphere-frontend:latest
 ```
+
