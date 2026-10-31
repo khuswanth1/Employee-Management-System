@@ -4,7 +4,7 @@ A responsive, high-performance Single Page Application (SPA) for the **WorkSpher
 
 ---
 
-## 🚀 Tech Stack
+## Tech Stack
 
 - **Framework**: [React 19](https://react.dev/)
 - **Build Tool**: [Vite 8](https://vitejs.dev/) with Fast Refresh & ESM
@@ -17,7 +17,7 @@ A responsive, high-performance Single Page Application (SPA) for the **WorkSpher
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```text
 frontend/
@@ -57,7 +57,7 @@ frontend/
 
 ---
 
-## 🛠️ Getting Started
+## Getting Started
 
 ### Prerequisites
 
@@ -90,7 +90,7 @@ VITE_API_PROXY=http://localhost:8000
 
 ---
 
-## 💻 Available Scripts
+## Available Scripts
 
 | Command | Description |
 |---|---|
@@ -101,7 +101,7 @@ VITE_API_PROXY=http://localhost:8000
 
 ---
 
-## 🌐 API Proxy & Real-Time Setup
+## API Proxy & Real-Time Setup
 
 The development server includes a built-in reverse proxy in `vite.config.js`:
 - All requests starting with `/api` are routed to the backend server (default: `http://localhost:8000`).
@@ -109,7 +109,7 @@ The development server includes a built-in reverse proxy in `vite.config.js`:
 
 ---
 
-## 🐳 Docker & Production Deployment
+## Docker & Production Deployment
 
 For production, the frontend is built into static HTML/JS/CSS assets and served via Nginx with single-page application fallback routing:
 
